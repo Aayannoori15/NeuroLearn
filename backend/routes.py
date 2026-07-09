@@ -1,6 +1,7 @@
 import uuid
+import re as _re
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
 from schemas import (
     StartSessionRequest,
     StartSessionResponse,
@@ -27,7 +28,10 @@ from schemas import (
     Token,
 )
 from database import create_session, get_session, update_session, get_users_collection
-from auth import create_access_token, get_password_hash, verify_password, get_current_user
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from jose import jwt, JWTError
+from auth import create_access_token, get_password_hash, verify_password, get_current_user, SECRET_KEY, ALGORITHM
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi import Depends
 from adaptive_engine import (
@@ -64,7 +68,26 @@ from flashcard_engine import (
     validate_flashcards,
 )
 
-router = APIRouter()
+def _rate_key(request: Request) -> str:
+    """
+    Rate-limit key: user_id from JWT when authenticated, otherwise remote IP.
+    Gives per-user limits on content endpoints, per-IP for public auth endpoints.
+    """
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth[7:]
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            uid = payload.get("id")
+            if uid:
+                return f"user:{uid}"
+        except (JWTError, Exception):
+            pass
+    return f"ip:{get_remote_address(request)}"
+
+
+limiter = Limiter(key_func=_rate_key)
+router  = APIRouter()
 
 
 def _ownership_check(session: dict, current_user: dict) -> None:
@@ -76,7 +99,8 @@ def _ownership_check(session: dict, current_user: dict) -> None:
 
 # --- Authentication ---
 @router.post("/auth/register", response_model=User)
-async def register(user: UserCreate):
+@limiter.limit("10/minute")
+async def register(request: Request, user: UserCreate):
     users_collection = get_users_collection()
     existing_user = await users_collection.find_one({"email": user.email})
     if existing_user:
@@ -102,7 +126,8 @@ async def register(user: UserCreate):
     )
 
 @router.post("/auth/login", response_model=Token)
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+@limiter.limit("5/minute")
+async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
     users_collection = get_users_collection()
     user = await users_collection.find_one({"email": form_data.username}) # OAuth2 form uses 'username' field for email usually
     
@@ -128,7 +153,8 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
 # ---------------------------------------------------------------------------
 
 @router.post("/start-session", response_model=StartSessionResponse)
-async def start_session(req: StartSessionRequest, current_user: dict = Depends(get_current_user)):
+@limiter.limit("20/minute")
+async def start_session(request: Request, req: StartSessionRequest, current_user: dict = Depends(get_current_user)):
     session_id = uuid.uuid4().hex[:12]
     await create_session(session_id, req.subject, user_id=current_user["user_id"])
     return StartSessionResponse(session_id=session_id, subject=req.subject, level="unknown")
@@ -139,7 +165,8 @@ async def start_session(req: StartSessionRequest, current_user: dict = Depends(g
 # ---------------------------------------------------------------------------
 
 @router.post("/diagnostic-questions")
-async def diagnostic_questions(req: GenerateRequest, current_user: dict = Depends(get_current_user)):
+@limiter.limit("10/minute")
+async def diagnostic_questions(request: Request, req: GenerateRequest, current_user: dict = Depends(get_current_user)):
     session = await get_session(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -151,7 +178,8 @@ async def diagnostic_questions(req: GenerateRequest, current_user: dict = Depend
 
 
 @router.post("/diagnostic", response_model=DiagnosticResponse)
-async def diagnostic(req: DiagnosticRequest, current_user: dict = Depends(get_current_user)):
+@limiter.limit("10/minute")
+async def diagnostic(request: Request, req: DiagnosticRequest, current_user: dict = Depends(get_current_user)):
     session = await get_session(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -188,7 +216,8 @@ async def diagnostic(req: DiagnosticRequest, current_user: dict = Depends(get_cu
 # ---------------------------------------------------------------------------
 
 @router.post("/generate-lesson", response_model=LessonResponse)
-async def generate_lesson(req: GenerateRequest, current_user: dict = Depends(get_current_user)):
+@limiter.limit("10/minute")
+async def generate_lesson(request: Request, req: GenerateRequest, current_user: dict = Depends(get_current_user)):
     session = await get_session(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -202,7 +231,8 @@ async def generate_lesson(req: GenerateRequest, current_user: dict = Depends(get
 
 
 @router.post("/generate-exercise", response_model=ExerciseResponse)
-async def generate_exercise(req: GenerateRequest, current_user: dict = Depends(get_current_user)):
+@limiter.limit("10/minute")
+async def generate_exercise(request: Request, req: GenerateRequest, current_user: dict = Depends(get_current_user)):
     session = await get_session(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -216,7 +246,8 @@ async def generate_exercise(req: GenerateRequest, current_user: dict = Depends(g
 
 
 @router.post("/submit-exercise", response_model=SubmitExerciseResponse)
-async def submit_exercise(req: SubmitExerciseRequest, current_user: dict = Depends(get_current_user)):
+@limiter.limit("20/minute")
+async def submit_exercise(request: Request, req: SubmitExerciseRequest, current_user: dict = Depends(get_current_user)):
     session = await get_session(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -290,7 +321,9 @@ async def submit_exercise(req: SubmitExerciseRequest, current_user: dict = Depen
 # ---------------------------------------------------------------------------
 
 @router.post("/upload-material", response_model=MaterialUploadResponse)
+@limiter.limit("5/minute")
 async def upload_material(
+    request: Request,
     session_id: str = Form(...),
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user),
@@ -323,7 +356,8 @@ async def upload_material(
 
 
 @router.post("/generate-from-material")
-async def generate_from_material(req: MaterialGenerateRequest, current_user: dict = Depends(get_current_user)):
+@limiter.limit("10/minute")
+async def generate_from_material(request: Request, req: MaterialGenerateRequest, current_user: dict = Depends(get_current_user)):
     # Try session lookup first; fall back to request-level subject/level
     session = await get_session(req.session_id)
     if session:
@@ -354,7 +388,8 @@ async def generate_from_material(req: MaterialGenerateRequest, current_user: dic
 # ---------------------------------------------------------------------------
 
 @router.post("/generate-flashcards", response_model=FlashcardResponse)
-async def generate_flashcards(req: FlashcardRequest, current_user: dict = Depends(get_current_user)):
+@limiter.limit("10/minute")
+async def generate_flashcards(request: Request, req: FlashcardRequest, current_user: dict = Depends(get_current_user)):
     # Try session lookup; fall back to request-level subject/level for standalone
     session = await get_session(req.session_id) if req.session_id else None
     if session:
@@ -418,7 +453,8 @@ async def generate_flashcards(req: FlashcardRequest, current_user: dict = Depend
 # ---------------------------------------------------------------------------
 
 @router.post("/progress", response_model=ProgressResponse)
-async def progress(req: GenerateRequest, current_user: dict = Depends(get_current_user)):
+@limiter.limit("30/minute")
+async def progress(request: Request, req: GenerateRequest, current_user: dict = Depends(get_current_user)):
     session = await get_session(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -462,7 +498,8 @@ async def progress(req: GenerateRequest, current_user: dict = Depends(get_curren
 
 
 @router.get("/weakness-profile/{session_id}", response_model=WeaknessProfileResponse)
-async def weakness_profile(session_id: str, current_user: dict = Depends(get_current_user)):
+@limiter.limit("30/minute")
+async def weakness_profile(request: Request, session_id: str, current_user: dict = Depends(get_current_user)):
     """Return the Weakness DNA profile for a session."""
     session = await get_session(session_id)
     if not session:
@@ -482,20 +519,20 @@ async def weakness_profile(session_id: str, current_user: dict = Depends(get_cur
 # ---------------------------------------------------------------------------
 
 @router.post("/generate-podcast", response_model=PodcastResponse)
-async def generate_podcast_route(req: PodcastRequest, current_user: dict = Depends(get_current_user)):
+@limiter.limit("3/minute")
+async def generate_podcast_route(request: Request, req: PodcastRequest, current_user: dict = Depends(get_current_user)):
     from podcast_engine import create_podcast
     result = await create_podcast(req.topic)
     return PodcastResponse(**result)
 
 
 @router.get("/podcast-audio/{filename}")
-async def serve_podcast_audio(filename: str):
-    """Serve generated podcast audio files (mp3)."""
-    import re as _re
+@limiter.limit("60/minute")
+async def serve_podcast_audio(request: Request, filename: str):
+    """Serve generated podcast audio files (mp3/wav)."""
     from fastapi.responses import FileResponse
     from podcast_engine import PODCAST_DIR
 
-    # Sanitise filename
     if not _re.match(r"^[a-z0-9_]+\.(mp3|wav)$", filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
 
