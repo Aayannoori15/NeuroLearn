@@ -66,6 +66,14 @@ from flashcard_engine import (
 
 router = APIRouter()
 
+
+def _ownership_check(session: dict, current_user: dict) -> None:
+    """Raise 403 if this session belongs to a different authenticated user."""
+    session_uid = session.get("user_id")
+    if session_uid and session_uid != current_user.get("user_id"):
+        raise HTTPException(status_code=403, detail="Access denied to this session")
+
+
 # --- Authentication ---
 @router.post("/auth/register", response_model=User)
 async def register(user: UserCreate):
@@ -131,10 +139,11 @@ async def start_session(req: StartSessionRequest, current_user: dict = Depends(g
 # ---------------------------------------------------------------------------
 
 @router.post("/diagnostic-questions")
-async def diagnostic_questions(req: GenerateRequest):
+async def diagnostic_questions(req: GenerateRequest, current_user: dict = Depends(get_current_user)):
     session = await get_session(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    _ownership_check(session, current_user)
 
     prompt = generate_diagnostic_prompt(session["subject"], req.question_type)
     questions = await generate_json(prompt)
@@ -142,10 +151,11 @@ async def diagnostic_questions(req: GenerateRequest):
 
 
 @router.post("/diagnostic", response_model=DiagnosticResponse)
-async def diagnostic(req: DiagnosticRequest):
+async def diagnostic(req: DiagnosticRequest, current_user: dict = Depends(get_current_user)):
     session = await get_session(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    _ownership_check(session, current_user)
 
     correct, total = _score_answers(req.answers)
     score = (correct / total * 100) if total > 0 else 0
@@ -178,12 +188,13 @@ async def diagnostic(req: DiagnosticRequest):
 # ---------------------------------------------------------------------------
 
 @router.post("/generate-lesson", response_model=LessonResponse)
-async def generate_lesson(req: GenerateRequest):
+async def generate_lesson(req: GenerateRequest, current_user: dict = Depends(get_current_user)):
     session = await get_session(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     if session["level"] == "unknown":
         raise HTTPException(status_code=400, detail="Complete diagnostic first")
+    _ownership_check(session, current_user)
 
     prompt = generate_lesson_prompt(session["subject"], session["level"])
     lesson_text = await generate_text(prompt)
@@ -191,12 +202,13 @@ async def generate_lesson(req: GenerateRequest):
 
 
 @router.post("/generate-exercise", response_model=ExerciseResponse)
-async def generate_exercise(req: GenerateRequest):
+async def generate_exercise(req: GenerateRequest, current_user: dict = Depends(get_current_user)):
     session = await get_session(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     if session["level"] == "unknown":
         raise HTTPException(status_code=400, detail="Complete diagnostic first")
+    _ownership_check(session, current_user)
 
     prompt = generate_exercise_prompt(session["subject"], session["level"], req.question_type)
     questions = await generate_json(prompt)
@@ -204,10 +216,11 @@ async def generate_exercise(req: GenerateRequest):
 
 
 @router.post("/submit-exercise", response_model=SubmitExerciseResponse)
-async def submit_exercise(req: SubmitExerciseRequest):
+async def submit_exercise(req: SubmitExerciseRequest, current_user: dict = Depends(get_current_user)):
     session = await get_session(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    _ownership_check(session, current_user)
 
     correct, total = _score_answers(req.answers)
     accuracy = (correct / total * 100) if total > 0 else 0
@@ -280,10 +293,12 @@ async def submit_exercise(req: SubmitExerciseRequest):
 async def upload_material(
     session_id: str = Form(...),
     file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
 ):
     # Session lookup is optional — allows standalone uploads without picking a subject
     session = await get_session(session_id)
-    # (no HTTPException if session is None — standalone mode)
+    if session:
+        _ownership_check(session, current_user)
 
     content = await file.read()
     filename = file.filename or "upload"
@@ -308,9 +323,11 @@ async def upload_material(
 
 
 @router.post("/generate-from-material")
-async def generate_from_material(req: MaterialGenerateRequest):
+async def generate_from_material(req: MaterialGenerateRequest, current_user: dict = Depends(get_current_user)):
     # Try session lookup first; fall back to request-level subject/level
     session = await get_session(req.session_id)
+    if session:
+        _ownership_check(session, current_user)
     if not has_material(req.session_id):
         raise HTTPException(status_code=400, detail="No material uploaded for this session")
 
@@ -337,9 +354,11 @@ async def generate_from_material(req: MaterialGenerateRequest):
 # ---------------------------------------------------------------------------
 
 @router.post("/generate-flashcards", response_model=FlashcardResponse)
-async def generate_flashcards(req: FlashcardRequest):
+async def generate_flashcards(req: FlashcardRequest, current_user: dict = Depends(get_current_user)):
     # Try session lookup; fall back to request-level subject/level for standalone
     session = await get_session(req.session_id) if req.session_id else None
+    if session:
+        _ownership_check(session, current_user)
 
     subject = (session["subject"] if session else None) or req.subject
     level = (session.get("level") if session else None) or req.level or "Beginner"
@@ -399,10 +418,11 @@ async def generate_flashcards(req: FlashcardRequest):
 # ---------------------------------------------------------------------------
 
 @router.post("/progress", response_model=ProgressResponse)
-async def progress(req: GenerateRequest):
+async def progress(req: GenerateRequest, current_user: dict = Depends(get_current_user)):
     session = await get_session(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    _ownership_check(session, current_user)
 
     total = session["total_attempts"]
     accuracy = (session["total_correct"] / total * 100) if total > 0 else 0
@@ -442,11 +462,12 @@ async def progress(req: GenerateRequest):
 
 
 @router.get("/weakness-profile/{session_id}", response_model=WeaknessProfileResponse)
-async def weakness_profile(session_id: str):
+async def weakness_profile(session_id: str, current_user: dict = Depends(get_current_user)):
     """Return the Weakness DNA profile for a session."""
     session = await get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    _ownership_check(session, current_user)
 
     perf = session.get("performance") or empty_performance()
     return WeaknessProfileResponse(
@@ -461,7 +482,7 @@ async def weakness_profile(session_id: str):
 # ---------------------------------------------------------------------------
 
 @router.post("/generate-podcast", response_model=PodcastResponse)
-async def generate_podcast_route(req: PodcastRequest):
+async def generate_podcast_route(req: PodcastRequest, current_user: dict = Depends(get_current_user)):
     from podcast_engine import create_podcast
     result = await create_podcast(req.topic)
     return PodcastResponse(**result)
