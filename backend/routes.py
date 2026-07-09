@@ -26,8 +26,9 @@ from schemas import (
     UserLogin,
     User,
     Token,
+    UserSessionsResponse,
 )
-from database import create_session, get_session, update_session, get_users_collection
+from database import create_session, get_session, update_session, get_users_collection, get_sessions_by_user
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from jose import jwt, JWTError
@@ -608,3 +609,22 @@ def _score_answers(answers: list[dict]) -> tuple[int, int]:
         if _is_answer_correct(qtype, user, expected):
             correct += 1
     return correct, total
+
+
+# ---------------------------------------------------------------------------
+# User session history
+# ---------------------------------------------------------------------------
+
+@router.get("/user/sessions", response_model=UserSessionsResponse)
+@limiter.limit("30/minute")
+async def user_sessions(
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    """Return all sessions for the authenticated user, newest first (max 50)."""
+    sessions = await get_sessions_by_user(current_user["user_id"])
+    return UserSessionsResponse(
+        user_id=current_user["user_id"],
+        sessions=sessions,
+        total=len(sessions),
+    )

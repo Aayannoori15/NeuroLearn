@@ -184,3 +184,20 @@ class Token(BaseModel):
     access_token: str
     token_type: str
     userId: str
+
+
+# --- User session history ---
+class UserSessionSummary(BaseModel):
+    session_id: str
+    subject: str
+    level: str
+    total_correct: int = 0
+    total_attempts: int = 0
+    mastery: float = 0.0
+    created_at: str = ""
+
+
+class UserSessionsResponse(BaseModel):
+    user_id: str
+    sessions: list[UserSessionSummary]
+    total: int
