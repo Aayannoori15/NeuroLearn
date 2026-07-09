@@ -147,6 +147,8 @@ class ProgressResponse(BaseModel):
     adaptive_mode: Optional[str] = None
     # Weakness DNA
     weakness_profile: dict = {}
+    # Topic suggestion
+    suggested_topic: Optional[str] = None
 
 
 class WeaknessTopicEntry(BaseModel):

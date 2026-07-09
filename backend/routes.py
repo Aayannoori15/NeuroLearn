@@ -46,6 +46,7 @@ from performance_tracker import (
     detect_stress,
     get_weakness_dna,
     empty_performance,
+    suggest_next_topic,
 )
 from material_rag import (
     extract_text,
@@ -412,6 +413,10 @@ async def progress(req: GenerateRequest):
     weaknesses = detect_weaknesses(perf)
     recs = get_study_recommendations(perf, session["subject"])
 
+    # Suggest the weakest topic from those already attempted
+    attempted_topics = list(perf.get("topic_accuracy", {}).keys())
+    suggested_topic = suggest_next_topic(perf, attempted_topics) if attempted_topics else None
+
     rt_list: list[float] = perf.get("response_times", [])
     avg_rt = round(sum(rt_list) / len(rt_list), 1) if rt_list else 0.0
 
@@ -432,6 +437,7 @@ async def progress(req: GenerateRequest):
         avg_response_time=avg_rt,
         adaptive_mode=perf.get("adaptive_mode"),
         weakness_profile=get_weakness_dna(perf),
+        suggested_topic=suggested_topic,
     )
 
 
