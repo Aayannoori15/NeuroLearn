@@ -75,7 +75,7 @@ Example:
 Generate the full script now. Return ONLY the JSON array, no extra text:"""
 
     try:
-        raw = await generate_text(prompt)
+        raw = await generate_text(prompt, task="podcast")
         parsed = _try_parse_json_array(raw)
         if parsed:
             normalised = []
