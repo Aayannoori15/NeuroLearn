@@ -136,7 +136,7 @@ async def diagnostic_questions(req: GenerateRequest):
         raise HTTPException(status_code=404, detail="Session not found")
 
     prompt = generate_diagnostic_prompt(session["subject"], req.question_type)
-    questions = await generate_json(prompt)
+    questions = await generate_json(prompt, task="diagnostic")
     return {"questions": questions, "subject": session["subject"]}
 
 
@@ -185,7 +185,7 @@ async def generate_lesson(req: GenerateRequest):
         raise HTTPException(status_code=400, detail="Complete diagnostic first")
 
     prompt = generate_lesson_prompt(session["subject"], session["level"])
-    lesson_text = await generate_text(prompt)
+    lesson_text = await generate_text(prompt, task="lesson")
     return LessonResponse(lesson=lesson_text, subject=session["subject"], level=session["level"])
 
 
@@ -198,7 +198,7 @@ async def generate_exercise(req: GenerateRequest):
         raise HTTPException(status_code=400, detail="Complete diagnostic first")
 
     prompt = generate_exercise_prompt(session["subject"], session["level"], req.question_type)
-    questions = await generate_json(prompt)
+    questions = await generate_json(prompt, task="exercise")
     return ExerciseResponse(questions=questions, subject=session["subject"], level=session["level"])
 
 
@@ -323,11 +323,11 @@ async def generate_from_material(req: MaterialGenerateRequest):
 
     if req.mode == "lesson":
         prompt = build_rag_lesson_prompt(chunks, subject, level)
-        text = await generate_text(prompt)
+        text = await generate_text(prompt, task="lesson")
         return MaterialLessonResponse(lesson=text, source="uploaded material")
     else:
         prompt = build_rag_exercise_prompt(chunks, subject, level, req.question_type)
-        questions = await generate_json(prompt)
+        questions = await generate_json(prompt, task="exercise")
         return MaterialExerciseResponse(questions=questions, source="uploaded material")
 
 
@@ -376,12 +376,12 @@ async def generate_flashcards(req: FlashcardRequest):
         )
 
     # Generate with one retry on empty/invalid result
-    cards = await generate_json(prompt)
+    cards = await generate_json(prompt, task="flashcard")
     normalized = validate_flashcards(cards)
 
     if len(normalized) < 1:
         # Retry once
-        cards = await generate_json(prompt, retries=1)
+        cards = await generate_json(prompt, task="flashcard", retries=1)
         normalized = validate_flashcards(cards)
 
     if not normalized:
