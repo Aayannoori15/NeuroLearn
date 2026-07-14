@@ -8,9 +8,16 @@ from fastapi.security import OAuth2PasswordBearer
 from database import get_database
 
 # Configuration
-SECRET_KEY = os.getenv("SECRET_KEY", "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7")
+_secret = os.getenv("SECRET_KEY", "")
+if not _secret:
+    raise RuntimeError(
+        "SECRET_KEY environment variable is not set. "
+        "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\" "
+        "and add it to your .env file."
+    )
+SECRET_KEY = _secret
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 8 * 60  # 8 hours — long enough for a study session
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 

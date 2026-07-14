@@ -93,3 +93,40 @@ async def update_session(session_id: str, **fields):
         {"session_id": session_id},
         {"$set": fields},
     )
+
+
+async def get_sessions_by_user(user_id: str) -> list[dict]:
+    """
+    Return all sessions for a given user, ordered newest-first (max 50).
+    Only fetches summary fields — not the full performance blob.
+    """
+    cursor = get_collection().find(
+        {"user_id": user_id},
+        {
+            "session_id": 1,
+            "subject": 1,
+            "level": 1,
+            "total_correct": 1,
+            "total_attempts": 1,
+            "created_at": 1,
+            "performance.mastery_score": 1,
+        },
+    ).sort("created_at", -1).limit(50)
+
+    docs   = await cursor.to_list(length=50)
+    result = []
+    for doc in docs:
+        created = doc.get("created_at", "")
+        if hasattr(created, "isoformat"):
+            created = created.isoformat()
+        result.append({
+            "session_id":     doc["session_id"],
+            "subject":        doc.get("subject", ""),
+            "level":          doc.get("level", "unknown"),
+            "total_correct":  doc.get("total_correct", 0),
+            "total_attempts": doc.get("total_attempts", 0),
+            "mastery":        doc.get("performance", {}).get("mastery_score", 0.0),
+            "created_at":     str(created),
+        })
+    return result
+

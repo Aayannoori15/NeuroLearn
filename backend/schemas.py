@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 
 
@@ -168,11 +168,7 @@ class WeaknessProfileResponse(BaseModel):
 class UserCreate(BaseModel):
     username: str
     email: str
-    password: str
-
-class UserLogin(BaseModel):
-    email: str
-    password: str
+    password: str = Field(..., min_length=8)
 
 class User(BaseModel):
     id: str
@@ -184,3 +180,20 @@ class Token(BaseModel):
     access_token: str
     token_type: str
     userId: str
+
+
+# --- User session history ---
+class UserSessionSummary(BaseModel):
+    session_id: str
+    subject: str
+    level: str
+    total_correct: int = 0
+    total_attempts: int = 0
+    mastery: float = 0.0
+    created_at: str = ""
+
+
+class UserSessionsResponse(BaseModel):
+    user_id: str
+    sessions: list[UserSessionSummary]
+    total: int
