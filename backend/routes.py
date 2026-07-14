@@ -495,7 +495,12 @@ async def serve_podcast_audio(filename: str):
 # ---------------------------------------------------------------------------
 
 def _is_answer_correct(qtype: str, user: str, expected: str) -> bool:
-    """Check if a single answer is correct based on question type."""
+    """Check if a single answer is correct based on question type.
+
+    - true_false : normalises true/1/yes vs false/0/no
+    - qa         : token Jaccard similarity >= 0.30 after stop-word removal
+    - default    : exact string match (MCQ, short answer)
+    """
     if qtype == "true_false":
         if user in ("true", "1", "yes") and expected in ("true", "1", "yes"):
             return True
@@ -503,9 +508,24 @@ def _is_answer_correct(qtype: str, user: str, expected: str) -> bool:
             return True
         return False
     elif qtype == "qa":
-        return bool(user and expected and (user in expected or expected in user))
+        if not user or not expected:
+            return False
+        _STOP = {
+            "the", "a", "an", "is", "it", "in", "of", "to", "and", "or", "that",
+            "this", "are", "was", "be", "for", "on", "with", "as", "at", "by",
+            "from", "has", "its", "but", "not", "have", "had",
+        }
+        u_words = set(user.split()) - _STOP
+        e_words = set(expected.split()) - _STOP
+        # If stop-word removal empties both sides, fall back to exact match
+        if not u_words or not e_words:
+            return user == expected
+        intersection = u_words & e_words
+        union        = u_words | e_words
+        return len(intersection) / len(union) >= 0.30
     else:
         return user == expected
+
 
 
 def _add_correct_flags(answers: list[dict]) -> list[dict]:
